@@ -1,0 +1,6 @@
+.vscode
+env
+files-to-upload
+config.json
+backup-list.csv
+libs/__pycache__
