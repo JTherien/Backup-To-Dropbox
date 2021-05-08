@@ -6,14 +6,12 @@ import dropbox
 
 from libs.config import get_config
 
-config = get_config()
-
 BLOCKSIZE = 65536
+CHUNKSIZE = 4 * 1024 * 1024
+config = get_config()
 backup_list = config['backup inventory']
 dbx = dropbox.Dropbox(config['token'])
 
-# ToDo
-# Feed a .csv to list the directories to include in the backup
 with open(backup_list, 'r', newline='') as f:
 
     reader = csv.reader(f, delimiter=',')
@@ -30,13 +28,19 @@ with open(backup_list, 'r', newline='') as f:
 
             make_archive(archive_name, 'zip', line[0])
 
-            # Generate an SHA-1 hash of the file to check if the file
-            # has was changed prior to uploading to DropBox
-            
-            print('Chechking if .zip archive has changed...')
+            archive_path = f'{archive_name}.zip'
 
-            with open(f'{archive_name}.zip', 'rb') as a:
-                
+            archive_size = os.path.getsize(archive_path)
+
+            upload_file = False
+            
+            # Generate an SHA-1 hash of the file to check if the file
+            # has was changed prior to uploading to DropBox        
+            
+            print('Checking if .zip archive has changed...')
+
+            with open(archive_path, 'rb') as a:
+
                 hasher = hashlib.sha1()
                 buffer = a.read(BLOCKSIZE)
                 
@@ -45,24 +49,68 @@ with open(backup_list, 'r', newline='') as f:
                     hasher.update(buffer)
                     buffer = a.read(BLOCKSIZE)
                 
-                if hasher.hexdigest() != line[2]:
-
-                    print('Uploading archive to DropBox...')
+                if hasher.hexdigest() == line[2]:
                     
-                    dbx.files_upload(a.read(), f'/Backups/{line[1]}.zip')
+                    print('.zip archive is unchanged. Skipping upload...')
+                
+                else:
+                
+                    upload_file = True
+
+            if upload_file:
+                
+                print('Uploading archive to DropBox...')
+
+                file_size = os.path.getsize(archive_path)
+                
+                with open(archive_path, 'rb') as a:
+                    
+                    # Check if the zip archive is less than 150mb
+                    if archive_size <= CHUNKSIZE:
+
+                        dbx.files_upload(a.read(), f'/Backups/{line[1]}.zip')
+
+                    # https://www.dropboxforum.com/t5/Dropbox-API-Support-Feedback/How-to-upload-files-in-batch/td-p/434689
+                    else:
+
+                        upload_session_start_result = dbx.files_upload_session_start(a.read(CHUNKSIZE))
+
+                        cursor = dropbox.files.UploadSessionCursor(
+                            session_id=upload_session_start_result.session_id,
+                            offset=a.tell()
+                            )
+
+                        commit = dropbox.files.CommitInfo(path=f'/Backups/{line[1]}.zip')
+
+                        while a.tell() <= archive_size:
+                            
+                            if ((file_size - a.tell()) <= CHUNKSIZE):
+
+                                print(dbx.files_upload_session_finish(a.read(CHUNKSIZE),cursor,commit))
+
+                                break
+
+                            else:
+                                
+                                dbx.files_upload_session_append_v2(a.read(CHUNKSIZE),cursor)
+
+                                cursor.offset = a.tell()
 
                     print('Updating hash value...')
                     
                     line[2] = hasher.hexdigest()
-                
-                else:
 
-                    print('.zip archive is unchanged. Skipping upload...')
-
+            # remove file after check and / or upload is complete
             os.remove(f'{archive_name}.zip')
 
+            # overwrite the backup inventory with the latest file hash
             lines.append(line)
 
+dbx.close()
+
+# push updated hash values to the backup inventory
 with open(backup_list, 'w', newline='') as f:
+    
     writer = csv.writer(f, delimiter=',')
+    
     writer.writerows(lines)
