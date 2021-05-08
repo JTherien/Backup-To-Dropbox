@@ -1,16 +1,21 @@
 import csv
 import os
-from shutil import make_archive
 import hashlib
 import dropbox
+import shutil
+import py7zr
 
 from libs.config import get_config
 
 BLOCKSIZE = 65536
 CHUNKSIZE = 4 * 1024 * 1024
+
 config = get_config()
 backup_list = config['backup inventory']
+file_format = config['format']
 dbx = dropbox.Dropbox(config['token'])
+
+shutil.register_archive_format('7z', py7zr.pack_7zarchive, description='7zip archive')
 
 with open(backup_list, 'r', newline='') as f:
 
@@ -22,13 +27,17 @@ with open(backup_list, 'r', newline='') as f:
         
         if os.path.isdir(line[0]):
             
-            print(f'Creating backup archive for: {line[0]}...')
+            print(f'Creating a {file_format} archive for: {line[0]}...')
             
             archive_name = f'files-to-upload\\{line[1]}'
 
-            make_archive(archive_name, 'zip', line[0])
+            archive_path = f'{archive_name}.{file_format}'
 
-            archive_path = f'{archive_name}.zip'
+            dropbox_path = f'/Backups/{line[1]}.{file_format}'
+
+            shutil.make_archive(archive_name, file_format, line[0])
+            
+            print(f'Finished creating {file_format} archive...')
 
             archive_size = os.path.getsize(archive_path)
 
@@ -37,7 +46,7 @@ with open(backup_list, 'r', newline='') as f:
             # Generate an SHA-1 hash of the file to check if the file
             # has was changed prior to uploading to DropBox        
             
-            print('Checking if .zip archive has changed...')
+            print(f'Checking if {file_format} archive has changed...')
 
             with open(archive_path, 'rb') as a:
 
@@ -51,7 +60,7 @@ with open(backup_list, 'r', newline='') as f:
                 
                 if hasher.hexdigest() == line[2]:
                     
-                    print('.zip archive is unchanged. Skipping upload...')
+                    print(f'{file_format} archive is unchanged. Skipping upload...')
                 
                 else:
                 
@@ -59,7 +68,7 @@ with open(backup_list, 'r', newline='') as f:
 
             if upload_file:
                 
-                print('Uploading archive to DropBox...')
+                print(f'Uploading {file_format} archive to DropBox...')
 
                 file_size = os.path.getsize(archive_path)
                 
@@ -68,7 +77,7 @@ with open(backup_list, 'r', newline='') as f:
                     # Check if the zip archive is less than 150mb
                     if archive_size <= CHUNKSIZE:
 
-                        dbx.files_upload(a.read(), f'/Backups/{line[1]}.zip')
+                        dbx.files_upload(a.read(), dropbox_path)
 
                     # https://www.dropboxforum.com/t5/Dropbox-API-Support-Feedback/How-to-upload-files-in-batch/td-p/434689
                     else:
@@ -80,7 +89,7 @@ with open(backup_list, 'r', newline='') as f:
                             offset=a.tell()
                             )
 
-                        commit = dropbox.files.CommitInfo(path=f'/Backups/{line[1]}.zip')
+                        commit = dropbox.files.CommitInfo(path=dropbox_path)
 
                         while a.tell() <= archive_size:
                             
@@ -101,7 +110,7 @@ with open(backup_list, 'r', newline='') as f:
                     line[2] = hasher.hexdigest()
 
             # remove file after check and / or upload is complete
-            os.remove(f'{archive_name}.zip')
+            os.remove(f'{archive_name}.{file_format}')
 
             # overwrite the backup inventory with the latest file hash
             lines.append(line)
