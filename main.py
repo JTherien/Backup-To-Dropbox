@@ -8,7 +8,6 @@ import time
 from tqdm import tqdm
 
 from libs.config import get_config
-from libs.dropbox_content_hasher import DropboxContentHasher
 
 # future enhancements
 # - tqdm async for when generating zip archive
@@ -66,13 +65,13 @@ with open(backup_list, 'r', newline='') as f:
             
                 with open(archive_path, 'rb') as a:
 
-                    hasher = DropboxContentHasher()
+                    hasher = hashlib.sha256()
                     buffer = a.read(BLOCKSIZE)
                     progress.update(len(buffer))
 
                     while len(buffer) > 0:
                         
-                        hasher.update(buffer)
+                        hasher.update(hashlib.sha256(buffer).digest())
                         buffer = a.read(BLOCKSIZE)
                         progress.update(len(buffer))
 
