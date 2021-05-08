@@ -62,7 +62,7 @@ with open(backup_list, 'r', newline='') as f:
                 print(f'Finished creating {file_format} archive')
             
                 # Create a progress bar for reading the hash of the archive
-                progress = tqdm(range(archive_size), 'Verifying archive changes', unit='B', unit_scale=True, unit_divisor=1024))
+                progress = tqdm(range(archive_size), 'Verifying archive changes', unit='B', unit_scale=True, unit_divisor=1024)
             
                 with open(archive_path, 'rb') as a:
 
