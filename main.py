@@ -82,7 +82,11 @@ with open(backup_list, 'r', newline='') as f, tmp:
             else:
 
                 print('Uploading to Dropbox.')
-                with open(file_name_ext, 'rb') as a:
+                
+                if dropbox_path_ext in dropbox_files:
+                    dbx.files_delete(dropbox_path_ext)
+                
+                with open(file_path_ext, 'rb') as a:
                         
                     progress = tqdm(range(file_size), 'Uploading large file', unit='B', unit_scale=True, unit_divisor=1024)
                             
@@ -100,7 +104,7 @@ with open(backup_list, 'r', newline='') as f, tmp:
                         upload_buffer = a.read(BLOCKSIZE)
                                 
                         if ((file_size - a.tell()) <= BLOCKSIZE):
-                                    
+                            
                             print(dbx.files_upload_session_finish(upload_buffer,cursor,commit))
                             progress.update(len(upload_buffer))
                             print('Upload complete')
@@ -125,7 +129,7 @@ with open(backup_list, 'r', newline='') as f, tmp:
             line[2] = local_hash
 
         # remove file after check and / or upload is complete
-        if os.path.isdir(file_path_ext):
+        if os.path.exists(file_path_ext):
             os.remove(file_path_ext)
 
         # overwrite the backup inventory with the latest file hash
