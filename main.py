@@ -51,7 +51,7 @@ with open(backup_list, 'r', newline='') as f, tmp:
 
             dropbox_content_hash = None
 
-        if (os.path.isdir(line[0])) & (line[2] != dropbox_content_hash):
+        if os.path.isdir(line[0]):
             
             print(f'Creating a {file_format} archive for: {line[0]}')
             shutil.make_archive(file_path, file_format, line[0])
@@ -75,8 +75,6 @@ with open(backup_list, 'r', newline='') as f, tmp:
 
                 local_hash = hasher.hexdigest()
 
-            # if the local archive matches Dropbox at this stage, that 
-            # means the backup database had an incorrect hash value stored
             if local_hash == dropbox_content_hash:
                     
                 print('Generated archive hash matches Dropbox hash. Skipping.')
