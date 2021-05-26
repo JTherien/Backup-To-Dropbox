@@ -1,26 +1,18 @@
 import os
 import csv
-import hashlib
 import shutil
-from tempfile import NamedTemporaryFile
 from tqdm import tqdm
 import py7zr
 import dropbox
 
 from libs.config import get_config
-
-# future enhancements
-# - tqdm async for when generating zip archive
-# - Write hash values to .csv file as you go rather than waiting until the end
-# - Chunk excessively big libraries
+from libs.hasher import content_hash
 
 BLOCKSIZE = 4 * 1024 * 1024
 
 config = get_config()
-tmp = NamedTemporaryFile('w+t', newline='', delete=False)
 backup_list = config['backup inventory']
 file_format = config['format']
-lines = [['Path','Archive','Last Hash']]
 
 # register 7zip as an archive format in shutil
 shutil.register_archive_format('7z', py7zr.pack_7zarchive, description='7zip archive')
@@ -29,10 +21,9 @@ shutil.register_archive_format('7z', py7zr.pack_7zarchive, description='7zip arc
 dbx = dropbox.Dropbox(config['token'], timeout=None)
 dropbox_files = [e.name for e in dbx.files_list_folder('/Backups/').entries]
 
-with open(backup_list, 'r', newline='') as f, tmp:
+with open(backup_list, 'r', newline='') as f:
     
     reader = csv.reader(f, delimiter=',', quotechar='"')
-    writer = csv.writer(tmp, delimiter=',', quotechar='"')
     
     next(reader)
 
@@ -51,41 +42,30 @@ with open(backup_list, 'r', newline='') as f, tmp:
 
             dropbox_content_hash = None
 
-        if os.path.isdir(line[0]):
+        archive_path = line[0].replace('%APPDATA%', os.environ['APPDATA'])
+
+        if os.path.isdir(archive_path):
             
-            print(f'Creating a {file_format} archive for: {line[0]}')
-            shutil.make_archive(file_path, file_format, line[0])
+            print(f'Creating a {file_format} archive for: {archive_path}')
+            shutil.make_archive(file_path, file_format, archive_path)
             file_size = os.path.getsize(file_path_ext)
             print(f'Finished creating {file_format} archive')
             
-            progress = tqdm(range(file_size), 'Verifying archive changes', unit='B', unit_scale=True, unit_divisor=1024)
-            
-            # Get hash value of the local archive
-            with open(file_path_ext, 'rb') as a:
+            # Get hash value of the local archive following Dropbox
+            # sha256 hasihng guidelines
+            local_hash = content_hash(file_path_ext, BLOCKSIZE)
 
-                hasher = hashlib.sha256()
-                buffer = a.read(BLOCKSIZE)
-                progress.update(len(buffer))
-
-                while len(buffer) > 0:
-                        
-                    hasher.update(hashlib.sha256(buffer).digest())
-                    buffer = a.read(BLOCKSIZE)
-                    progress.update(len(buffer))
-
-                local_hash = hasher.hexdigest()
+            print(f'\nLocal hash: {local_hash}')
+            print(f'Remote hash: {dropbox_content_hash}')
 
             if local_hash == dropbox_content_hash:
                     
-                print('Generated archive hash matches Dropbox hash. Skipping.')
+                print('\nGenerated archive hash matches Dropbox hash. Skipping.')
                 
             else:
 
-                print('Uploading to Dropbox.')
-                
-                if dropbox_path_ext in dropbox_files:
-                    dbx.files_delete(dropbox_path_ext)
-                
+                print('\nUploading to Dropbox.')
+                               
                 with open(file_path_ext, 'rb') as a:
                         
                     progress = tqdm(range(file_size), 'Uploading large file', unit='B', unit_scale=True, unit_divisor=1024)
@@ -100,14 +80,29 @@ with open(backup_list, 'r', newline='') as f, tmp:
                     commit = dropbox.files.CommitInfo(path=dropbox_path_ext)
 
                     while a.tell() <= file_size:
-                                
+
                         upload_buffer = a.read(BLOCKSIZE)
                                 
                         if ((file_size - a.tell()) <= BLOCKSIZE):
-                            
+                                                       
+                            # last complete block
+                            dbx.files_upload_session_append_v2(upload_buffer,cursor)
+                            cursor.offset = a.tell()
+
+                            upload_buffer = a.read((file_size - a.tell()))
+
+                            # delete existing file on Dropbox if it exists
+                            # this is done immediately before upload to
+                            # minimize the risk of deleting the remote copy
+                            # before the local copy is ready to be uploaded
+                            if file_name_ext in dropbox_files:
+                    
+                                print('Archive exists in Dropbox. Deleting old archive.')
+                                dbx.files_delete(dropbox_path_ext)
+
+                            # complete file upload
                             print(dbx.files_upload_session_finish(upload_buffer,cursor,commit))
                             progress.update(len(upload_buffer))
-                            print('Upload complete')
 
                             break
                             
@@ -131,14 +126,5 @@ with open(backup_list, 'r', newline='') as f, tmp:
         # remove file after check and / or upload is complete
         if os.path.exists(file_path_ext):
             os.remove(file_path_ext)
-
-        # overwrite the backup inventory with the latest file hash
-        lines.append(line)
-
-    for line in writer:
-        
-        writer.writerows(lines)
-
-shutil.move(tmp.name, backup_list)
 
 dbx.close()
