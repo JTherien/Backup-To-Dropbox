@@ -1,130 +1,112 @@
+'''
+Requirements:
+-   7z needs to be installed on the machine and 7z.exe needs to be 
+    available in PATH
+'''
+
 import os
-import csv
-import shutil
-from tqdm import tqdm
-import py7zr
+import subprocess
 import dropbox
-
-from libs.config import get_config
+import yaml
 from libs.hasher import content_hash
+from libs.upload import upload_to_dropbox
 
+with open('config.yaml', 'r') as stream:
+
+    config = yaml.safe_load(stream)
+
+dropbox_path = config['dropbox_path']
 BLOCKSIZE = 4 * 1024 * 1024
-
-config = get_config()
-backup_list = config['backup inventory']
-file_format = config['format']
-
-# register 7zip as an archive format in shutil
-shutil.register_archive_format('7z', py7zr.pack_7zarchive, description='7zip archive')
 
 # establish a connection to the Dropbox API
 dbx = dropbox.Dropbox(config['token'], timeout=None)
-dropbox_files = [e.name for e in dbx.files_list_folder('/Backups/').entries]
+dropbox_files = [e.name for e in dbx.files_list_folder(dropbox_path).entries]
 
-with open(backup_list, 'r', newline='') as f:
-    
-    reader = csv.reader(f, delimiter=',', quotechar='"')
-    
-    next(reader)
+backup_list_usr_selection = []
 
-    for line in reader:
+for directory in config['backup_list']:
+
+    while True:
         
-        file_name_ext = f'{line[1]}.{file_format}'
-        file_path = f'files-to-upload\\{line[1]}'
-        file_path_ext = f'{file_path}.{file_format}'
-        dropbox_path_ext = f'/Backups/{file_name_ext}'
+        response = input(f'Do you want to create and upload {directory["archive_name"]} [Y/N]: ').upper()
 
-        if file_name_ext in dropbox_files:
+        if response in {'Y', 'N'}:
             
-            dropbox_content_hash =  dbx.files_alpha_get_metadata(dropbox_path_ext).content_hash
+            if response == 'Y':
+                
+                backup_list_usr_selection.append(directory)
+
+            break
 
         else:
 
-            dropbox_content_hash = None
+            print('Please select Y or N.')
 
-        archive_path = line[0].replace('%APPDATA%', os.environ['APPDATA'])
+for directory in backup_list_usr_selection:
+    
+    # Dictionary used to pass all the components into the upload function at once
+    local_file = {}
+    local_file['local_path'] = os.path.expandvars(directory['path'])
+    local_file['temp_local_path'] = config['temp_local_path']
+    local_file['archive_name'] = directory["archive_name"]
+    local_file['extension'] = '.7z'
+    local_file['archive_name_ext'] = f'{local_file["archive_name"]}{local_file["extension"]}'
+    local_file['temp_local_archive'] = f'{local_file["temp_local_path"]}{local_file["archive_name_ext"]}'
+    dropbox_path_ext = f'{dropbox_path}{local_file["archive_name"]}{local_file["extension"]}'
 
-        if os.path.isdir(archive_path):
+    if local_file['archive_name_ext'] in dropbox_files:
+        
+        dropbox_content_hash =  dbx.files_alpha_get_metadata(dropbox_path_ext).content_hash
+
+    else:
+
+        dropbox_content_hash = None
+
+    if os.path.isdir(local_file['local_path']):
             
-            print(f'Creating a {file_format} archive for: {archive_path}')
-            shutil.make_archive(file_path, file_format, archive_path)
-            file_size = os.path.getsize(file_path_ext)
-            print(f'Finished creating {file_format} archive')
-            
-            # Get hash value of the local archive following Dropbox
-            # sha256 hasihng guidelines
-            local_hash = content_hash(file_path_ext, BLOCKSIZE)
+        # Zipping to a .7z archive is faster when calling the 7z executable rather than using shutil
+        # Response code generated here can also be used to validate if the archive write was a success
+        archive_result = subprocess.call(['7z', 'a', '-t7z', local_file['temp_local_archive'], local_file['local_path']])
 
-            print(f'\nLocal hash: {local_hash}')
-            print(f'Remote hash: {dropbox_content_hash}')
+        if archive_result == 0:
+
+            file_size = os.path.getsize(local_file['temp_local_archive'])
+    
+            # Get hash value of the local archive following Dropbox hasihng guidelines
+            local_hash = content_hash(local_file['temp_local_archive'], BLOCKSIZE)
+            print(f'\nLocal hash:\t{local_hash}')
+            print(f'Remote hash:\t{dropbox_content_hash}')
 
             if local_hash == dropbox_content_hash:
-                    
-                print('\nGenerated archive hash matches Dropbox hash. Skipping.')
-                
+            
+                print('\nLocal and remote hashes match. Skipping upload.')
+        
             else:
-
-                print('\nUploading to Dropbox.')
-                               
-                with open(file_path_ext, 'rb') as a:
                         
-                    progress = tqdm(range(file_size), 'Uploading large file', unit='B', unit_scale=True, unit_divisor=1024)
-                            
-                    upload_session_start_result = dbx.files_upload_session_start(a.read(BLOCKSIZE))
-                            
-                    cursor = dropbox.files.UploadSessionCursor(
-                        session_id=upload_session_start_result.session_id,
-                        offset=a.tell()
-                        )
+                upload_result = upload_to_dropbox(
+                    dbx, 
+                    local_file,
+                    dropbox_path_ext,
+                    dropbox_files,
+                    BLOCKSIZE
+                    )
 
-                    commit = dropbox.files.CommitInfo(path=dropbox_path_ext)
+                print('Upload Complete.')
+                print(f'Name: {upload_result.name}')
+                print(f'Size: {upload_result.size}')
+                print(f'Path: {upload_result.path_display}\n')
 
-                    while a.tell() <= file_size:
-
-                        upload_buffer = a.read(BLOCKSIZE)
-                                
-                        if ((file_size - a.tell()) <= BLOCKSIZE):
-                                                       
-                            # last complete block
-                            dbx.files_upload_session_append_v2(upload_buffer,cursor)
-                            cursor.offset = a.tell()
-
-                            upload_buffer = a.read((file_size - a.tell()))
-
-                            # delete existing file on Dropbox if it exists
-                            # this is done immediately before upload to
-                            # minimize the risk of deleting the remote copy
-                            # before the local copy is ready to be uploaded
-                            if file_name_ext in dropbox_files:
-                    
-                                print('Archive exists in Dropbox. Deleting old archive.')
-                                dbx.files_delete(dropbox_path_ext)
-
-                            # complete file upload
-                            print(dbx.files_upload_session_finish(upload_buffer,cursor,commit))
-                            progress.update(len(upload_buffer))
-
-                            break
-                            
-                        else:
-                                
-                            dbx.files_upload_session_append_v2(upload_buffer,cursor)
-                            progress.update(len(upload_buffer))
-                            cursor.offset = a.tell()
-
-                print('Verifying hash values')
-
-                dropbox_content_hash =  dbx.files_alpha_get_metadata(dropbox_path_ext).content_hash
-                
-                if local_hash == dropbox_content_hash:
-                    print('Hash values verified')
+                if local_hash == upload_result.content_hash:
+                    print('Local and remote hash values match.')
                 else:
-                    print('Hash values do not match')
-                
-            line[2] = local_hash
+                    print('WARNING: Local and remote hash values do NOT match.')
 
-        # remove file after check and / or upload is complete
-        if os.path.exists(file_path_ext):
-            os.remove(file_path_ext)
+        else:
+
+            print('7z encountered an error with archiving. Skipping.')
+
+    # remove file after check and / or upload is complete
+    if os.path.exists(local_file['temp_local_archive']):
+        os.remove(local_file['temp_local_archive'])
 
 dbx.close()
