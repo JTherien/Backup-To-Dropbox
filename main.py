@@ -10,6 +10,7 @@ import dropbox
 import yaml
 from libs.hasher import content_hash
 from libs.upload import upload_to_dropbox
+from libs.upload import convert_size
 
 with open('config.yaml', 'r') as stream:
 
@@ -65,9 +66,9 @@ for directory in backup_list_usr_selection:
     if os.path.isdir(local_file['local_path']):
             
         # Zipping to a .7z archive is faster when calling the 7z executable rather than using shutil
-        # Response code generated here can also be used to validate if the archive write was a success
         archive_result = subprocess.call(['7z', 'a', '-t7z', local_file['temp_local_archive'], local_file['local_path']])
 
+        # https://sevenzip.osdn.jp/chm/cmdline/exit_codes.htm
         if archive_result == 0:
 
             file_size = os.path.getsize(local_file['temp_local_archive'])
@@ -93,7 +94,7 @@ for directory in backup_list_usr_selection:
 
                 print('Upload Complete.')
                 print(f'Name: {upload_result.name}')
-                print(f'Size: {upload_result.size}')
+                print(f'Size: {convert_size(upload_result.size)}')
                 print(f'Path: {upload_result.path_display}\n')
 
                 if local_hash == upload_result.content_hash:

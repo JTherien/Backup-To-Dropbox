@@ -1,10 +1,6 @@
 .vscode
 env
 files-to-upload
-config.json
 config.yaml
-backup-list.csv
-backup-list-test.csv
 libs/__pycache__
-test-dir
 test-scripts
