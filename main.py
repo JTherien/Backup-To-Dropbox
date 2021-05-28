@@ -10,9 +10,8 @@ import os
 import subprocess
 import dropbox
 import yaml
-import glob
-from libs.hasher import content_hash
-from libs.upload import upload_to_dropbox
+from libs.filesystem import reset_tmp_dir
+from libs.upload import upload_tmp_files
 from libs.upload import convert_size
 from libs.bitwarden import bw_get_password
 
@@ -21,23 +20,49 @@ with open('config.yaml', 'r') as stream:
     config = yaml.safe_load(stream)
 
 BLOCKSIZE = 4 * (1024 ** 2)
-MAXSIZE = 5 * (1024 ** 3)
+MAXSIZE = 2 * (1024 ** 3)
 
-# clear out the temporary folder
-if os.path.isdir(config['temp_local_path']):
+# establish a connection to the Dropbox API
+dbx = dropbox.Dropbox(config['token'], timeout=None)
+dropbox_files = [e.name for e in dbx.files_list_folder(config['dropbox_path']).entries]
 
-    for root, dirs, files in os.walk(config['temp_local_path']):
-        for file in files:
-            os.remove(os.path.join(root, file))
+# scan tmp folder for any volumes that didn't get uploaded to DropBox in
+# the previous session
+if len(os.listdir(config["temp_local_path"]) ) != 0:
+    
+    while True:
 
-else:
+        resume_response = input(f'Scan {config["temp_local_path"]} for volumes ' \
+            + 'not yet uploaded to DropBox? [Y: Default]/N: ').upper()
 
-    os.makedirs(config['temp_local_path'])
+        if resume_response in {'Y', 'N', ''}:
+
+            if resume_response in {'Y', ''}:
+                
+                upload_tmp_files(
+                    dbx, 
+                    config["temp_local_path"] + '*.7z', 
+                    config["dropbox_path"], 
+                    dropbox_files, 
+                    BLOCKSIZE
+                    )
+
+                break
+            
+            else:
+
+                break
+            
+        else:
+
+            print('Please select Y or N.')
+
+reset_tmp_dir(config['temp_local_path'])
 
 # user input to determine if the archive should be encrypted
 while True:
    
-    encrypt_reponse = input('Do you want to encrypt the archives\n' \
+    encrypt_reponse = input('\nDo you want to encrypt the archives?\n' \
         +'Note: Encrypting files will force an upload to Dropbox as the content hash will always be different\n' \
         +'[Y: Default]/N: ').upper()
 
@@ -64,10 +89,6 @@ while True:
     else:
 
         print('Please select Y or N.')
-
-# establish a connection to the Dropbox API
-dbx = dropbox.Dropbox(config['token'], timeout=None)
-dropbox_files = [e.name for e in dbx.files_list_folder(config['dropbox_path']).entries]
 
 # user input to select which directories to back-up
 backup_list_usr_selection = []
@@ -135,56 +156,18 @@ for directory in backup_list_usr_selection:
         # https://sevenzip.osdn.jp/chm/cmdline/exit_codes.htm
         if archive_result == 0:
 
-            for volume in glob.glob(tmp_file + "*"):
-
-                volume_base_name = os.path.basename(volume)
-                volume_file_size = os.path.getsize(volume)
-                dropbox_path_ext = f'{config["dropbox_path"]}{volume_base_name}'
-                
-                if volume_base_name in dropbox_files:
-        
-                    dropbox_content_hash =  dbx.files_alpha_get_metadata(dropbox_path_ext).content_hash
-
-                else:
-
-                    dropbox_content_hash = None
-    
-                # get hash value of the local archive following Dropbox hasihng guidelines
-                local_hash = content_hash(volume, BLOCKSIZE)
-                print(f'\n{volume_base_name}')
-                print(f'Local hash:\t{local_hash}')
-                print(f'Remote hash:\t{dropbox_content_hash}')
-
-                if local_hash == dropbox_content_hash:
-                
-                    print('\nLocal and remote hashes match. Skipping upload.')
-            
-                else:
-                        
-                    upload_result = upload_to_dropbox(
-                        dbx, 
-                        volume,
-                        dropbox_path_ext,
-                        dropbox_files,
-                        BLOCKSIZE
-                        )
-
-                    print('Upload Complete.')
-                    print(f'Name: {upload_result.name}')
-                    print(f'Size: {convert_size(upload_result.size)}')
-                    print(f'Path: {upload_result.path_display}\n')
-
-                    if local_hash == upload_result.content_hash:
-                        print('Local and remote hash values match.')
-                    else:
-                        print('WARNING: Local and remote hash values do NOT match.')
-            
-                # remove file after check and / or upload is complete
-                if os.path.exists(volume):
-                    os.remove(volume)
+            upload_tmp_files(
+                dbx, 
+                tmp_file, 
+                config["dropbox_path"], 
+                dropbox_files, 
+                BLOCKSIZE
+                )
 
         else:
 
             print('7z encountered an error with archiving. Skipping.')
+
+reset_tmp_dir(config['temp_local_path'])
 
 dbx.close()

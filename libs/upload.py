@@ -2,6 +2,8 @@ import dropbox
 import os
 import math
 from tqdm import tqdm
+from libs.hasher import content_hash
+import glob
 
 def convert_size(size_bytes: int):
     if size_bytes == 0:
@@ -76,3 +78,55 @@ def upload_to_dropbox(
                 dbx.files_upload_session_append_v2(upload_buffer,cursor)
                 progress.update(len(upload_buffer))
                 cursor.offset = a.tell()
+
+def upload_tmp_files(
+    dbx=None, 
+    tmp_file:str=None,
+    remote_file_path:str=None,
+    remote_files:list=None, 
+    block_size:int=4*1024*1024):
+
+    for volume in glob.glob(tmp_file + "*"):
+
+        volume_base_name = os.path.basename(volume)
+        dropbox_path_ext = f'{remote_file_path}{volume_base_name}'
+                
+        if volume_base_name in remote_files:
+        
+            dropbox_content_hash =  dbx.files_alpha_get_metadata(dropbox_path_ext).content_hash
+
+        else:
+
+            dropbox_content_hash = None
+
+        # get hash value of the local archive following Dropbox hasihng guidelines
+        local_hash = content_hash(volume, block_size)
+        print(f'\n{volume_base_name}')
+        print(f'Local hash:\t{local_hash}')
+        print(f'Remote hash:\t{dropbox_content_hash}')
+
+        if local_hash == dropbox_content_hash:
+        
+            print('\nLocal and remote hashes match. Skipping upload.')
+    
+        else:
+                
+            upload_result = upload_to_dropbox(
+                dbx, 
+                volume,
+                dropbox_path_ext,
+                remote_files,
+                block_size
+                )
+
+            print('Upload Complete.')
+            print(f'Name: {upload_result.name}')
+            print(f'Size: {convert_size(upload_result.size)}')
+            print(f'Path: {upload_result.path_display}\n')
+
+            if local_hash == upload_result.content_hash:
+                print('Local and remote hash values match.')
+            else:
+                print('WARNING: Local and remote hash values do NOT match.')
+
+    return None
