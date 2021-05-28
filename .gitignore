@@ -1,6 +1,7 @@
 .vscode
 env
 files-to-upload
+tmp
 config.yaml
 libs/__pycache__
 test-scripts

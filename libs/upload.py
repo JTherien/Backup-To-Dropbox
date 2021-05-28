@@ -17,12 +17,12 @@ def convert_size(size_bytes: int):
 
 def upload_to_dropbox(
     dbx=None, 
-    local_file:dict=None, 
+    local_file_path:str=None, 
     remote_file_path:str=None, 
     remote_files:list=None, 
     BLOCKSIZE: int=4*1024*1024):
 
-    file_size = os.path.getsize(local_file['temp_local_archive'])
+    file_size = os.path.getsize(local_file_path)
 
     progress = tqdm(
     range(file_size), 
@@ -32,7 +32,7 @@ def upload_to_dropbox(
     unit_divisor=1024
     )
 
-    with open(local_file['temp_local_archive'], 'rb') as a:
+    with open(local_file_path, 'rb') as a:
 
         upload_session_start_result = dbx.files_upload_session_start(a.read(BLOCKSIZE))
                                     
@@ -59,7 +59,7 @@ def upload_to_dropbox(
                 # this is done immediately before upload to
                 # minimize the risk of deleting the remote copy
                 # before the local copy is ready to be uploaded
-                if local_file['archive_name_ext'] in remote_files:
+                if os.path.basename(local_file_path) in remote_files:
 
                     print('\nArchive exists in Dropbox. Deleting old archive.')
                     dbx.files_delete(remote_file_path)
