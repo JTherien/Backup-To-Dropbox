@@ -37,7 +37,9 @@ else:
 # user input to determine if the archive should be encrypted
 while True:
    
-    encrypt_reponse = input('Do you want to encrypt the archives [Y: Default]/N: ').upper()
+    encrypt_reponse = input('Do you want to encrypt the archives\n' \
+        +'Note: Encrypting files will force an upload to Dropbox as the content hash will always be different\n' \
+        +'[Y: Default]/N: ').upper()
 
     if encrypt_reponse in {'Y', 'N', ''}:
 
